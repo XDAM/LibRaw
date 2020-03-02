@@ -61,6 +61,7 @@ void usage(const char *prog)
   printf("-c float-num       Set adjust maximum threshold (default 0.75)\n"
          "-v        Verbose: print progress messages (repeated -v will add "
          "verbosity)\n"
+         "-e        extract thumbnails (same as dcraw -e in separate run)\n"
          "-w        Use camera white balance, if possible\n"
          "-a        Average the whole image for white balance\n"
          "-A <x y w h> Average a grey box for white balance\n"
@@ -130,6 +131,7 @@ void usage(const char *prog)
 
 static int verbosity = 0;
 int cnt = 0;
+int output_thumbs = 0;
 int my_progress_callback(void *d, enum LibRaw_progress p, int iteration,
                          int expected)
 {
@@ -251,6 +253,11 @@ int main(int argc, char *argv[])
 #ifdef OUT
 #undef OUT
 #endif
+#define P1 RawProcessor.imgdata.idata
+#define S RawProcessor.imgdata.sizes
+#define C RawProcessor.imgdata.color
+#define T RawProcessor.imgdata.thumbnail
+#define P2 RawProcessor.imgdata.other
 #define OUT RawProcessor.imgdata.params
 
   argv[argc] = (char *)"";
@@ -277,6 +284,9 @@ int main(int argc, char *argv[])
       break;
     case 'c':
       OUT.adjust_maximum_thr = (float)atof(argv[arg++]);
+      break;
+    case 'e':
+      output_thumbs++;
       break;
     case 'U':
       OUT.auto_bright_thr = (float)atof(argv[arg++]);
@@ -487,7 +497,7 @@ int main(int argc, char *argv[])
 
   for (; arg < argc; arg++)
   {
-    char outfn[1024];
+    char outfn[1024], thumbfn[1024];
 
     if (verbosity)
       printf("Processing file %s\n", argv[arg]);
@@ -573,10 +583,69 @@ int main(int argc, char *argv[])
       timerprint("LibRaw::open_file()", argv[arg]);
 
     timerstart();
-    if ((ret = RawProcessor.unpack()) != LIBRAW_SUCCESS)
+
+    if (!output_thumbs)
+      if ((ret = RawProcessor.unpack()) != LIBRAW_SUCCESS)
+      {
+        fprintf(stderr, "Cannot unpack %s: %s\n", argv[arg],
+                libraw_strerror(ret));
+        continue;
+      }
+    
+    if (output_thumbs)
     {
-      fprintf(stderr, "Cannot unpack %s: %s\n", argv[arg],
-              libraw_strerror(ret));
+      if ((ret = RawProcessor.unpack_thumb()) != LIBRAW_SUCCESS)
+      {
+        fprintf(stderr, "Cannot unpack_thumb %s: %s\n", argv[arg],
+                libraw_strerror(ret));
+        if (LIBRAW_FATAL_ERROR(ret))
+          continue; // skip to next file
+      }
+      else
+      {
+        if (!outext)
+          snprintf(thumbfn, sizeof(thumbfn), "%s.%s", argv[arg],
+                  OUT.output_tiff ? "tiff" : (P1.colors > 1 ? "ppm" : "pgm"));
+        else if (!strcmp(outext, "-"))
+          snprintf(thumbfn, sizeof(thumbfn), "-");
+        else
+        {
+          if (*outext == '.') // append
+            snprintf(thumbfn, sizeof(thumbfn), "%s%s", argv[arg], outext);
+          else if (strchr(outext, '.') && *outext != '.') // dot is not 1st char
+            strncpy(thumbfn, outext, sizeof(thumbfn));
+          else
+          {
+            strncpy(thumbfn, argv[arg], sizeof(thumbfn));
+            if (strlen(thumbfn) > 0)
+            {
+              char *lastchar = thumbfn + strlen(thumbfn); // points to term 0
+              while (--lastchar > thumbfn)
+              {
+                if (*lastchar == '/' || *lastchar == '\\')
+                  break;
+                if (*lastchar == '.')
+                {
+                  *lastchar = 0;
+                  break;
+                };
+              }
+            }
+            strncat(thumbfn, ".", sizeof(thumbfn) - strlen(thumbfn) - 1);
+            strncat(thumbfn, outext, sizeof(thumbfn) - strlen(thumbfn) - 1);
+          }
+        }
+
+        if (verbosity)
+          printf("Writing thumbnail file %s\n", thumbfn);
+        if (LIBRAW_SUCCESS != (ret = RawProcessor.dcraw_thumb_writer(thumbfn)))
+        {
+          fprintf(stderr, "Cannot write %s: %s\n", thumbfn,
+                  libraw_strerror(ret));
+          if (LIBRAW_FATAL_ERROR(ret))
+            continue;
+        }
+      }
       continue;
     }
 

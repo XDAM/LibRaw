@@ -268,7 +268,17 @@ int LibRaw::dcraw_thumb_writer(const char *fname)
   if (!fname)
     return ENOENT;
 
-  FILE *tfp = fopen(fname, "wb");
+  FILE *tfp = NULL;
+  if (!strcmp(fname, "-"))
+  {
+#ifdef LIBRAW_WIN32_CALLS
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    tfp = stdout;
+  }
+  else {
+    tfp = fopen(fname, "wb");
+  }
 
   if (!tfp)
     return errno;
